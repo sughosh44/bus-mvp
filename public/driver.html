@@ -1,0 +1,123 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Driver — Live Location</title>
+  <style>
+    body{ font-family: Inter, Arial, sans-serif; background:#07101a; color:#e6eef8; padding:20px; }
+    .card{ max-width:520px; margin:auto; background:#071a1f; padding:16px; border-radius:10px; }
+    input{ width:100%; padding:10px; border-radius:8px; border:1px solid #234; background:#021017; color:#e6eef8; margin-top:8px; }
+    button{ padding:10px 14px; border-radius:8px; border:none; cursor:pointer; font-weight:700; margin-top:10px; }
+    .start{ background:#06b6d4; color:#012; }
+    .stop{ background:#ef4444; color:#fff; margin-left:8px; }
+    pre{ background:#031019; padding:8px; color:#bfe8f2; max-height:220px; overflow:auto; margin-top:10px; border-radius:8px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Driver — Start Live Location</h2>
+
+    <label>Bus Number (display)</label>
+    <input id="busNumber" placeholder="e.g. MH-12-AB-1234" />
+
+    <label>Bus ID (unique)</label>
+    <input id="busId" placeholder="e.g. bus-23 or vehicle123" />
+
+    <div style="margin-top:12px;">
+      <button id="startBtn" class="start">Submit & Start</button>
+      <button id="stopBtn" class="stop" disabled>Stop</button>
+    </div>
+
+    <div id="info" style="margin-top:8px; color:#9fb0c8">Not streaming</div>
+    <pre id="log">Logs:\n</pre>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    // Driver client script (socket + REST fallback)
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const info = document.getElementById('info');
+    const logEl = document.getElementById('log');
+    const busIdInput = document.getElementById('busId');
+    const busNumInput = document.getElementById('busNumber');
+
+    // Pre-fill from query params if present
+    (function prefill(){
+      const ps = new URLSearchParams(location.search);
+      if(ps.get('busId')) busIdInput.value = ps.get('busId');
+      if(ps.get('busNumber')) busNumInput.value = ps.get('busNumber');
+      if(ps.get('token')) window._driver_token = ps.get('token');
+    })();
+
+    let socket = null;
+    let watchId = null;
+
+    function log(...args){
+      logEl.textContent += args.join(' ') + '\\n';
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    startBtn.addEventListener('click', () => {
+      const busId = (busIdInput.value||'').trim();
+      const busNumber = (busNumInput.value||'').trim();
+      if(!busId){ alert('Enter Bus ID'); return; }
+      const token = window._driver_token || null;
+
+      socket = io({ transports: ['websocket'] });
+      socket.on('connect', ()=> log('socket connected ' + socket.id));
+      socket.on('driver:error', (d)=> log('driver:error ' + JSON.stringify(d)));
+
+      // register (optional)
+      socket.emit('driver:register', { busId, busNumber });
+
+      if (!navigator.geolocation){
+        alert('Geolocation unsupported in this browser');
+        return;
+      }
+
+      info.textContent = 'Requesting location permission...';
+      watchId = navigator.geolocation.watchPosition((pos) => {
+        const payload = {
+          id: busId,
+          busNumber,
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          speed: pos.coords.speed || 0,
+          routeId: 'route-1',
+          ts: Date.now(),
+          token
+        };
+        if (socket && socket.connected){
+          socket.emit('driver:location', payload);
+          log('ws -> ' + payload.lat.toFixed(5) + ',' + payload.lng.toFixed(5));
+        } else {
+          // fallback POST
+          fetch('/api/driver/update', {
+            method: 'POST',
+            headers: { 'Content-Type':'application/json', 'x-driver-token': token },
+            body: JSON.stringify(payload)
+          }).then(r=>r.json()).then(j=> log('post ok')).catch(e=> log('post err', e));
+        }
+        info.textContent = `Streaming as ${busId} — last ${new Date().toLocaleTimeString()}`;
+      }, (err) => {
+        log('geo err', err.message);
+        info.textContent = 'Location error: ' + err.message;
+      }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 });
+
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+    });
+
+    stopBtn.addEventListener('click', () => {
+      if (watchId) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+      if (socket) { socket.disconnect(); socket = null; }
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      info.textContent = 'Stopped';
+      log('stopped');
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,124 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Commuter — Live Bus Tracker</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    body,html{height:100%;margin:0;font-family:Arial}
+    #wrap{display:flex;height:100vh}
+    #map{flex:1}
+    #panel{width:360px;padding:12px;background:#fff;box-shadow:-2px 0 8px rgba(0,0,0,.08);overflow:auto}
+    .bus-card{padding:8px;border:1px solid #eee;border-radius:6px;margin-bottom:8px;cursor:pointer}
+    .controls{margin-bottom:10px}
+    #gkey{width:100%;padding:8px;border-radius:6px;border:1px solid #ddd}
+    button{padding:8px 10px;border-radius:6px;border:none;background:#0b5;color:#fff;cursor:pointer}
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="map"></div>
+    <div id="panel">
+      <h3>Live Bus Tracker</h3>
+      <div class="controls">
+        <label>Google Maps API key (optional):</label>
+        <input id="gkey" placeholder="Paste key to enable Google Maps UI"/>
+        <button id="loadGoogle">Load Google Maps</button>
+      </div>
+      <div>
+        <strong>Active buses</strong>
+        <div id="busesList" style="margin-top:8px"></div>
+      </div>
+      <div style="margin-top:10px;color:#666;font-size:13px">
+        Tip: To test from phone, serve this app over HTTPS (ngrok) so geolocation works reliably.
+      </div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const socket = io();
+    let mapMode = 'leaflet';
+    let leafletMap = null;
+    let googleMap = null;
+    const markers = {}; // id -> marker
+    window.latestBuses = {};
+
+    function initLeaflet(){
+      if (leafletMap) return;
+      leafletMap = L.map('map').setView([21.149,79.091],14);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(leafletMap);
+      mapMode = 'leaflet';
+    }
+
+    function loadGoogleMaps(apiKey){
+      if(!apiKey) return alert('Paste key');
+      if(leafletMap){ leafletMap.remove(); leafletMap=null; }
+      window.initGoogleMaps = function(){
+        googleMap = new google.maps.Map(document.getElementById('map'), { center:{lat:21.149,lng:79.091}, zoom:14 });
+        mapMode = 'google';
+      };
+      const s = document.createElement('script');
+      s.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&callback=initGoogleMaps`;
+      s.async = true;
+      document.head.appendChild(s);
+    }
+
+    function handleBusUpdate(bus){
+      window.latestBuses[bus.id] = bus;
+      const pos = { lat: Number(bus.lat), lng: Number(bus.lng) };
+      if(mapMode === 'leaflet'){
+        if(!leafletMap) initLeaflet();
+        if(!markers[bus.id]){
+          const icon = L.divIcon({ className:'bus-icon', html:`<div style="padding:6px;border-radius:6px;background:#f59e0b;color:#000;font-weight:700">🚍 ${bus.busNumber||bus.id}</div>` });
+          markers[bus.id] = L.marker([pos.lat,pos.lng],{icon}).addTo(leafletMap);
+        } else {
+          markers[bus.id].setLatLng([pos.lat,pos.lng]);
+        }
+        markers[bus.id].bindPopup(`<b>${bus.busNumber||bus.id}</b><br/>${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)}<br/>speed: ${Math.round((bus.speed||0)*3.6)} km/h`);
+      } else if(mapMode === 'google' && window.google && googleMap){
+        if(!markers[bus.id]){
+          markers[bus.id] = new google.maps.Marker({ position: pos, map: googleMap, label:{text: String(bus.busNumber||bus.id), color:'#000'}});
+        } else {
+          markers[bus.id].setPosition(pos);
+        }
+      }
+      renderList();
+    }
+
+    function renderList(){
+      const el = document.getElementById('busesList');
+      el.innerHTML = '';
+      const keys = Object.keys(window.latestBuses);
+      if(keys.length === 0){ el.innerHTML = '<div style="color:#666">No active buses</div>'; return; }
+      keys.forEach(id=>{
+        const bus = window.latestBuses[id];
+        const lat = (bus.lat || 0).toFixed ? Number(bus.lat).toFixed(5) : '-';
+        const lng = (bus.lng || 0).toFixed ? Number(bus.lng).toFixed(5) : '-';
+        const div = document.createElement('div');
+        div.className = 'bus-card';
+        div.innerHTML = `<div style="display:flex;justify-content:space-between"><div><strong>${bus.busNumber||id}</strong><div style="font-size:12px;color:#666">${id}</div></div><div style="text-align:right">${lat}, ${lng}</div></div>`;
+        div.addEventListener('click', ()=>{
+          if(mapMode === 'leaflet' && leafletMap) leafletMap.setView([Number(lat), Number(lng)], 16);
+          if(mapMode === 'google' && googleMap) googleMap.setCenter({lat:Number(lat), lng:Number(lng)}), googleMap.setZoom(16);
+        });
+        el.appendChild(div);
+      });
+    }
+
+    socket.on('connect', ()=> console.log('connected'));
+    socket.on('bus:update', (bus) => {
+      handleBusUpdate(bus);
+    });
+
+    initLeaflet();
+    document.getElementById('loadGoogle').addEventListener('click', ()=>{
+      const key = document.getElementById('gkey').value.trim();
+      loadGoogleMaps(key);
+    });
+  </script>
+</body>
+</html>
