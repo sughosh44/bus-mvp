@@ -1,4 +1,51 @@
 // index.js
+// --- durable token store (file-backed) ---
+const fs = require('fs');
+const path = require('path');
+const TOKENS_FILE = path.join(__dirname, 'tokens.json');
+
+let TOKENS = {}; // token -> { busId, routeId, expiresAt }
+
+function loadTokens(){
+  try{
+    if(fs.existsSync(TOKENS_FILE)){
+      const raw = fs.readFileSync(TOKENS_FILE, 'utf8');
+      TOKENS = JSON.parse(raw) || {};
+    } else {
+      TOKENS = {};
+    }
+  }catch(e){
+    console.error('failed loading tokens file', e);
+    TOKENS = {};
+  }
+}
+function saveTokens(){
+  try{
+    fs.writeFileSync(TOKENS_FILE, JSON.stringify(TOKENS, null, 2), 'utf8');
+  }catch(e){
+    console.error('failed saving tokens file', e);
+  }
+}
+loadTokens();
+
+function createToken(busId, routeId='route-1', ttlMs=12*3600*1000){
+  const t = 'tk_' + Math.random().toString(36).slice(2,10);
+  const entry = { busId, routeId, expiresAt: Date.now() + ttlMs };
+  TOKENS[t] = entry;
+  saveTokens();
+  return t;
+}
+
+function verifyToken(tk, busId){
+  if(!tk) return false;
+  const e = TOKENS[tk];
+  if(!e) return false;
+  if(e.expiresAt < Date.now()){ delete TOKENS[tk]; saveTokens(); return false; }
+  if(busId && e.busId && e.busId !== busId) return false;
+  return true;
+}
+// --- end token store ---
+
 const express = require('express');
 const http = require('http');
 const path = require('path');
